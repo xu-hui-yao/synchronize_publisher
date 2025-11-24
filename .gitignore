@@ -6,7 +6,7 @@
 *.Release
 *.Debug
 *.exe
-assets
+assets/
 
 
 cmake-build-*/

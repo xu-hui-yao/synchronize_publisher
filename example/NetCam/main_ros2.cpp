@@ -8,6 +8,9 @@
 
 #include <sensor_msgs/msg/imu.hpp>
 
+#define QUEUE_LENGTH 30
+#define SCALE_FACTOR 0.5
+
 struct cam_config {
     bool onboard_imu = true;// 使用内部IMU
     bool extern_imu = false;// 使用外部IMU,TODO 
@@ -49,12 +52,14 @@ class CamDriver final : public rclcpp::Node {
 
     if (cfg.CAM1.second >= 0) mv_cam_->SetParams({{cfg.CAM1.first, CAM_1}, {cfg.CAM2.first, CAM_2}, {cfg.CAM3.first, CAM_3}});
 
+    // rclcpp::QoS qos_profile();
+    // qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+    // qos_profile.durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
 
-
-    if (cfg.CAM1.second >= 0) image_pubs_[cfg.CAM1.first] = transport_.advertise(cfg.CAM1.first, 30);
-    if (cfg.CAM2.second >= 0) image_pubs_[cfg.CAM2.first] = transport_.advertise(cfg.CAM2.first, 30);
-    if (cfg.CAM3.second >= 0) image_pubs_[cfg.CAM3.first] = transport_.advertise(cfg.CAM3.first, 30);
-    if (cfg.CAM4.second >= 0) image_pubs_[cfg.CAM4.first] = transport_.advertise(cfg.CAM4.first, 30);
+    if (cfg.CAM1.second >= 0) image_pubs_[cfg.CAM1.first] = transport_.advertise(cfg.CAM1.first, QUEUE_LENGTH);
+    if (cfg.CAM2.second >= 0) image_pubs_[cfg.CAM2.first] = transport_.advertise(cfg.CAM2.first, QUEUE_LENGTH);
+    if (cfg.CAM3.second >= 0) image_pubs_[cfg.CAM3.first] = transport_.advertise(cfg.CAM3.first, QUEUE_LENGTH);
+    if (cfg.CAM4.second >= 0) image_pubs_[cfg.CAM4.first] = transport_.advertise(cfg.CAM4.first, QUEUE_LENGTH);
 
     synchronizer_.UseSensor(mv_cam_);
     synchronizer_.Start();
@@ -104,8 +109,18 @@ class CamDriver final : public rclcpp::Node {
     header.frame_id = "map";
     // const cv::Mat image_mat(cam_data->image.rows, cam_data->image.cols, CV_8UC1, cam_data->image.data);
     // const sensor_msgs::msg::Image::SharedPtr image_msg = cv_bridge::CvImage(header, "mono8", image_mat).toImageMsg();
-    const cv::Mat image_mat(cam_data->image.rows, cam_data->image.cols, CV_8UC3, cam_data->image.data);
-    const sensor_msgs::msg::Image::SharedPtr image_msg = cv_bridge::CvImage(header, "bgr8", image_mat).toImageMsg();
+    // const cv::Mat image_mat(cam_data->image.rows, cam_data->image.cols, CV_8UC3, cam_data->image.data);
+    // const sensor_msgs::msg::Image::SharedPtr image_msg = cv_bridge::CvImage(header, "bgr8", image_mat).toImageMsg();
+    // 原始图像
+    cv::Mat original_image(cam_data->image.rows, cam_data->image.cols, CV_8UC3, cam_data->image.data);
+    // 创建下采样图像容器
+    cv::Mat resized_image;
+    cv::resize(original_image, resized_image, 
+               cv::Size(original_image.cols * SCALE_FACTOR, 
+                        original_image.rows * SCALE_FACTOR));
+    // 转换为ROS消息（注意：使用与原始图像相同的编码）
+    const sensor_msgs::msg::Image::SharedPtr image_msg = 
+        cv_bridge::CvImage(header, "bgr8", resized_image).toImageMsg();
     image_pubs_[cam_data->name].publish(image_msg);
   }
 
