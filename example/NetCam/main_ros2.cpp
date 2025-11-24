@@ -54,7 +54,7 @@ class CamDriver final : public rclcpp::Node {
 
     // 显示节点中
     rclcpp::QoS qos_profile(QUEUE_LENGTH); // 匹配发布端的队列长度
-    qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+    qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);
     qos_profile.durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
     qos_profile.history(RMW_QOS_POLICY_HISTORY_KEEP_LAST);
 
