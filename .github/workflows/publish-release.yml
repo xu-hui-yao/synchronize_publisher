@@ -1,0 +1,67 @@
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    env:
+      CMAKE_BUILD_TYPE: Release
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev libopencv-dev
+
+      - name: Setup ROS environment
+        uses: ros-tooling/setup-ros@0.7.14
+        with:
+          required-ros-distributions: noetic
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }}
+
+      - name: Build
+        run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }}
+
+      - name: Collect binaries and libraries
+        shell: bash
+        run: |
+          set -eo pipefail
+          mkdir -p dist/bin dist/lib
+
+          if compgen -G "build/**/libinfinite_sense_core.*" > /dev/null; then
+            find build -maxdepth 3 -name 'libinfinite_sense_core.*' -exec cp {} dist/lib/ \;
+          fi
+
+          while IFS= read -r exe; do
+            if file "$exe" | grep -q 'ELF'; then
+              install -Dm755 "$exe" "dist/bin/$(basename "$exe")"
+            fi
+          done < <(find build -maxdepth 3 \( -path '*/example/*' -o -path '*/tools/*' \) -type f -executable)
+
+          tar -czf "SimpleSensorSync-${{ github.ref_name }}-linux-x64.tar.gz" -C dist .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleSensorSync-${{ github.ref_name }}-linux-x64
+          path: SimpleSensorSync-${{ github.ref_name }}-linux-x64.tar.gz
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: SimpleSensorSync-${{ github.ref_name }}-linux-x64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
