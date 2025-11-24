@@ -8,7 +8,7 @@
 
 #include <sensor_msgs/msg/imu.hpp>
 
-#define QUEUE_LENGTH 30
+#define QUEUE_LENGTH 10
 #define SCALE_FACTOR 0.5
 
 struct cam_config {
@@ -52,14 +52,16 @@ class CamDriver final : public rclcpp::Node {
 
     if (cfg.CAM1.second >= 0) mv_cam_->SetParams({{cfg.CAM1.first, CAM_1}, {cfg.CAM2.first, CAM_2}, {cfg.CAM3.first, CAM_3}});
 
-    // rclcpp::QoS qos_profile();
-    // qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
-    // qos_profile.durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
+    // 显示节点中
+    rclcpp::QoS qos_profile(QUEUE_LENGTH); // 匹配发布端的队列长度
+    qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+    qos_profile.durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
+    qos_profile.history(RMW_QOS_POLICY_HISTORY_KEEP_LAST);
 
-    if (cfg.CAM1.second >= 0) image_pubs_[cfg.CAM1.first] = transport_.advertise(cfg.CAM1.first, QUEUE_LENGTH);
-    if (cfg.CAM2.second >= 0) image_pubs_[cfg.CAM2.first] = transport_.advertise(cfg.CAM2.first, QUEUE_LENGTH);
-    if (cfg.CAM3.second >= 0) image_pubs_[cfg.CAM3.first] = transport_.advertise(cfg.CAM3.first, QUEUE_LENGTH);
-    if (cfg.CAM4.second >= 0) image_pubs_[cfg.CAM4.first] = transport_.advertise(cfg.CAM4.first, QUEUE_LENGTH);
+    if (cfg.CAM1.second >= 0) image_pubs_[cfg.CAM1.first] = transport_.advertise(cfg.CAM1.first, qos_profile.get_rmw_qos_profile());
+    if (cfg.CAM2.second >= 0) image_pubs_[cfg.CAM2.first] = transport_.advertise(cfg.CAM2.first, qos_profile.get_rmw_qos_profile());
+    if (cfg.CAM3.second >= 0) image_pubs_[cfg.CAM3.first] = transport_.advertise(cfg.CAM3.first, qos_profile.get_rmw_qos_profile());
+    if (cfg.CAM4.second >= 0) image_pubs_[cfg.CAM4.first] = transport_.advertise(cfg.CAM4.first, qos_profile.get_rmw_qos_profile());
 
     synchronizer_.UseSensor(mv_cam_);
     synchronizer_.Start();
