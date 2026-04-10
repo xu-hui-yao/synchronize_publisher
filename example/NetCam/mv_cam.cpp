@@ -446,6 +446,8 @@ void MvCam::Receive(void *handle, const std::string &name) {
   MV_FRAME_OUT st_out_frame;
   CamData cam_data;
   Messenger &messenger = Messenger::GetInstance();
+#define MAX_IMAGE_DATA_SIZE (3 * 4000 * 4000)
+  std::vector<unsigned char> convert_buf(MAX_IMAGE_DATA_SIZE);
   while (is_running) {
     memset(&st_out_frame, 0, sizeof(MV_FRAME_OUT));
     int n_ret = MV_CC_GetImageBuffer(handle, &st_out_frame, 10);
@@ -508,17 +510,13 @@ void MvCam::Receive(void *handle, const std::string &name) {
           // // cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
           // //                       GMatType<uint8_t, 3>::Type, st_out_frame.pBufAddr)
           // //                      .Clone();
-          
-#define MAX_IMAGE_DATA_SIZE (3 * 4000 * 4000)
-          unsigned char *m_pBufForSaveImage = (unsigned char *) malloc(MAX_IMAGE_DATA_SIZE);
           MV_CC_PIXEL_CONVERT_PARAM stConvertParam{};
           stConvertParam.nWidth      = st_out_frame.stFrameInfo.nWidth;            // ch:图像宽 | en:image width
           stConvertParam.nHeight     = st_out_frame.stFrameInfo.nHeight;           // ch:图像高 | en:image height
           stConvertParam.pSrcData    = st_out_frame.pBufAddr;               // ch:输入数据缓存 | en:input data buffer
           stConvertParam.nSrcDataLen = st_out_frame.stFrameInfo.nFrameLen;         // ch:输入数据大小 | en:input data size
-          stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed; // ch:输出像素格式 | en:output pixel format //!
-                                                                      // 输出格式 RGB
-          stConvertParam.pDstBuffer     = m_pBufForSaveImage;  // ch:输出数据缓存 | en:output data buffer
+          stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed; // ch:输出像素格式 | en:output pixel format
+          stConvertParam.pDstBuffer     = convert_buf.data();  // ch:输出数据缓存 | en:output data buffer
           stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE; // ch:输出缓存大小 | en:output buffer size
           stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType; // ch:输入像素格式 | en:input pixel format
           auto nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
@@ -527,9 +525,8 @@ void MvCam::Receive(void *handle, const std::string &name) {
               continue;
           }
           cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
-                                GMatType<uint8_t, 3>::Type, m_pBufForSaveImage)
+                                GMatType<uint8_t, 3>::Type, convert_buf.data())
                                .Clone();
-          free(m_pBufForSaveImage);
         }
         if (en_dst_pixel_type == PixelType_Gvsp_Mono8) {
           cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
