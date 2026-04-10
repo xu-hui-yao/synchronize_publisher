@@ -16,6 +16,7 @@ struct CamData {
   uint64_t time_stamp_us;  // microseconds since start of recording
   std::string name;        // camera name
   GMat image;              // image data
+  uint64_t exposure_time_us; // exposure time in microseconds (camera reported)
 };
 
 struct LaserData {

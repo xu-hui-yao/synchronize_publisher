@@ -5,6 +5,8 @@ message(STATUS "System Processor: ${CMAKE_SYSTEM_PROCESSOR}")
 
 find_package(Threads REQUIRED)
 find_package(OpenCV QUIET)
+find_package(CURL QUIET)
+find_package(TIFF QUIET)
 
 if(OpenCV_FOUND)
 message(STATUS "Found OpenCV version: ${OpenCV_VERSION}")
@@ -22,6 +24,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         infinite_sense_core
         ${OpenCV_LIBS}
         Threads::Threads
+        ${CURL_LIBRARIES}
+        ${TIFF_LIBRARIES}
 )
 target_include_directories(${PROJECT_NAME} PRIVATE ${OpenCV_INCLUDE_DIRS})
 set_target_properties(${PROJECT_NAME} PROPERTIES INSTALL_RPATH "$ORIGIN")
@@ -48,6 +52,8 @@ else ()
     target_link_libraries(${PROJECT_NAME}_ros2
             infinite_sense_core
             ${OpenCV_LIBRARIES}
+            ${CURL_LIBRARIES}
+            ${TIFF_LIBRARIES}
     )
     set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
     ament_target_dependencies(${PROJECT_NAME}_ros2
@@ -91,6 +97,8 @@ else ()
             infinite_sense_core
             Threads::Threads
             ${catkin_LIBRARIES}
+            ${CURL_LIBRARIES}
+            ${TIFF_LIBRARIES}
     )
     target_include_directories(${PROJECT_NAME}_ros PRIVATE
             ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS}

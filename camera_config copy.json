@@ -1,0 +1,11 @@
+{
+  "exposure_mode": 0,
+  "exposure_time": 30000.0,
+  "gain_mode": 0,
+  "gain": 2,
+  "balance_mode": 2,
+  "balance_ratio_red": 1411,
+  "balance_ratio_green": 1024,
+  "balance_ratio_blue": 1390,
+  "gamma": 0.8
+}

@@ -7,9 +7,10 @@
 #include <cv_bridge/cv_bridge.h>
 
 #include <sensor_msgs/msg/imu.hpp>
+#include <std_msgs/msg/u_int64.hpp>
+#include <opencv2/opencv.hpp>
 
-#define QUEUE_LENGTH 10
-#define SCALE_FACTOR 0.5
+#define QUEUE_LENGTH 50
 
 struct cam_config {
     bool onboard_imu = true;// 使用内部IMU
@@ -53,15 +54,26 @@ class CamDriver final : public rclcpp::Node {
     if (cfg.CAM1.second >= 0) mv_cam_->SetParams({{cfg.CAM1.first, CAM_1}, {cfg.CAM2.first, CAM_2}, {cfg.CAM3.first, CAM_3}});
 
     // 显示节点中
-    rclcpp::QoS qos_profile(QUEUE_LENGTH); // 匹配发布端的队列长度
-    qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);
-    qos_profile.durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
-    qos_profile.history(RMW_QOS_POLICY_HISTORY_KEEP_LAST);
+    // rclcpp::QoS qos_profile(QUEUE_LENGTH); // 匹配发布端的队列长度
+    // qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);
+    // qos_profile.durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
+    // qos_profile.history(RMW_QOS_POLICY_HISTORY_KEEP_LAST);
 
-    if (cfg.CAM1.second >= 0) image_pubs_[cfg.CAM1.first] = transport_.advertise(cfg.CAM1.first, qos_profile.get_rmw_qos_profile());
-    if (cfg.CAM2.second >= 0) image_pubs_[cfg.CAM2.first] = transport_.advertise(cfg.CAM2.first, qos_profile.get_rmw_qos_profile());
-    if (cfg.CAM3.second >= 0) image_pubs_[cfg.CAM3.first] = transport_.advertise(cfg.CAM3.first, qos_profile.get_rmw_qos_profile());
-    if (cfg.CAM4.second >= 0) image_pubs_[cfg.CAM4.first] = transport_.advertise(cfg.CAM4.first, qos_profile.get_rmw_qos_profile());
+    // if (cfg.CAM1.second >= 0) image_pubs_[cfg.CAM1.first] = transport_.advertise(cfg.CAM1.first, qos_profile.get_rmw_qos_profile());
+    // if (cfg.CAM2.second >= 0) image_pubs_[cfg.CAM2.first] = transport_.advertise(cfg.CAM2.first, qos_profile.get_rmw_qos_profile());
+    // if (cfg.CAM3.second >= 0) image_pubs_[cfg.CAM3.first] = transport_.advertise(cfg.CAM3.first, qos_profile.get_rmw_qos_profile());
+    // if (cfg.CAM4.second >= 0) image_pubs_[cfg.CAM4.first] = transport_.advertise(cfg.CAM4.first, qos_profile.get_rmw_qos_profile());
+
+    if (cfg.CAM1.second >= 0) image_pubs_[cfg.CAM1.first] = transport_.advertise(cfg.CAM1.first, QUEUE_LENGTH);
+    if (cfg.CAM2.second >= 0) image_pubs_[cfg.CAM2.first] = transport_.advertise(cfg.CAM2.first, QUEUE_LENGTH);
+    if (cfg.CAM3.second >= 0) image_pubs_[cfg.CAM3.first] = transport_.advertise(cfg.CAM3.first, QUEUE_LENGTH);
+    if (cfg.CAM4.second >= 0) image_pubs_[cfg.CAM4.first] = transport_.advertise(cfg.CAM4.first, QUEUE_LENGTH);
+
+    // create exposure publishers for each camera: topic <camera_name>_exposure
+    if (cfg.CAM1.second >= 0) exposure_pubs_[cfg.CAM1.first] = this->create_publisher<std_msgs::msg::UInt64>(cfg.CAM1.first + "_exposure", 10);
+    if (cfg.CAM2.second >= 0) exposure_pubs_[cfg.CAM2.first] = this->create_publisher<std_msgs::msg::UInt64>(cfg.CAM2.first + "_exposure", 10);
+    if (cfg.CAM3.second >= 0) exposure_pubs_[cfg.CAM3.first] = this->create_publisher<std_msgs::msg::UInt64>(cfg.CAM3.first + "_exposure", 10);
+    if (cfg.CAM4.second >= 0) exposure_pubs_[cfg.CAM4.first] = this->create_publisher<std_msgs::msg::UInt64>(cfg.CAM4.first + "_exposure", 10);
 
     synchronizer_.UseSensor(mv_cam_);
     synchronizer_.Start();
@@ -118,12 +130,25 @@ class CamDriver final : public rclcpp::Node {
     // 创建下采样图像容器
     cv::Mat resized_image;
     cv::resize(original_image, resized_image, 
-               cv::Size(original_image.cols * SCALE_FACTOR, 
-                        original_image.rows * SCALE_FACTOR));
+               cv::Size(original_image.cols * 0.5, 
+                        original_image.rows * 0.5), 0, 0, cv::INTER_LINEAR);
+    // cv::Mat denoise_image;
+    // cv::fastNlMeansDenoisingColored(resized_image, denoise_image, 3, 3, 5, 7);
     // 转换为ROS消息（注意：使用与原始图像相同的编码）
     const sensor_msgs::msg::Image::SharedPtr image_msg = 
         cv_bridge::CvImage(header, "bgr8", resized_image).toImageMsg();
-    image_pubs_[cam_data->name].publish(image_msg);
+    // publish exposure time on separate topic
+    if (exposure_pubs_.find(cam_data->name) != exposure_pubs_.end()) {
+      std_msgs::msg::UInt64 exp_msg;
+      exp_msg.data = cam_data->exposure_time_us;
+      exposure_pubs_[cam_data->name]->publish(exp_msg);
+    }
+    auto it_img = image_pubs_.find(cam_data->name);
+    if (it_img != image_pubs_.end()) {
+      it_img->second.publish(image_msg);
+    } else {
+      RCLCPP_WARN(this->get_logger(), "No image publisher for camera '%s'", cam_data->name.c_str());
+    }
   }
 
 
@@ -133,6 +158,7 @@ class CamDriver final : public rclcpp::Node {
   image_transport::ImageTransport transport_;
   std::shared_ptr<MvCam> mv_cam_;
   std::unordered_map<std::string, image_transport::Publisher> image_pubs_;
+  std::unordered_map<std::string, rclcpp::Publisher<std_msgs::msg::UInt64>::SharedPtr> exposure_pubs_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
 };
 
