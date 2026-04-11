@@ -72,6 +72,8 @@ bool IsBayerRG8(const MvGvspPixelType type) {
   switch (type) {
     case PixelType_Gvsp_BayerRG8:
       return true;
+    case PixelType_Gvsp_BayerRG12:
+      return true;
     default:
       return false;
   }
