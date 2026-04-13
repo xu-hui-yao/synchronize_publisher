@@ -2,7 +2,12 @@
 #include "infinite_sense.h"
 // 加入工业相机头文件
 #include "mv_cam.h"
+#include <csignal>
+#include <atomic>
 using namespace infinite_sense;
+
+static std::atomic<bool> g_running{true};
+static void SigintHandler(int) { g_running = false; }
 // 自定义回调函数
 void ImuCallback(const void *msg, size_t) {
   const auto *imu_data = static_cast<const ImuData *>(msg);
@@ -49,11 +54,15 @@ int main(int argc, char* argv[]) {
   // 3.开启同步
   synchronizer.Start();
 
+  // 注册信号处理，确保 Ctrl+C 能触发正常退出流程
+  std::signal(SIGINT, SigintHandler);
+  std::signal(SIGTERM, SigintHandler);
+
   // 4.接收数据
   Messenger::GetInstance().SubStruct("imu_1", ImuCallback);
   Messenger::GetInstance().SubStruct("cam_1", ImageCallback);
 
-  while (true) {
+  while (g_running) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
