@@ -622,7 +622,7 @@ void MvCam::Receive(void *handle, const std::string &name) {
             if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
               // LOG(INFO) << "Found calib_map_: " << name << "\n";
               // 使用局部临时缓冲，防止多线程冲突
-              std::vector<unsigned char> lsc_tmp(st_out_frame.stFrameInfo.nFrameLen > 0 ? st_out_frame.stFrameInfo.nFrameLen : MAX_IMAGE_DATA_SIZE);
+              std::vector<unsigned char> lsc_tmp(MAX_IMAGE_DATA_SIZE);
               MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
               stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
               stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
