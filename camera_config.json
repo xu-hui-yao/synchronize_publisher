@@ -1,11 +1,16 @@
 {
+  "lsc_calib_paths": {
+	"cam_1": "/home/xuhuiyao/Desktop/workfield/sync/SimpleSensorSync/cam1/LSCCalib_cam1.bin",
+	"cam_2": "/home/xuhuiyao/Desktop/workfield/sync/SimpleSensorSync/cam2/LSCCalib_cam2.bin",
+	"cam_3": "/home/xuhuiyao/Desktop/workfield/sync/SimpleSensorSync/cam3/LSCCalib_cam3.bin"
+	},
   "exposure_mode": 0,
-  "exposure_time": 30000.0,
+  "exposure_time": 2000.0,
   "ideal_brightness": 100.0,
   "alpha": 0.3,
   "gain_mode": 0,
-  "gain": 0,
-  "balance_mode": 2,
+  "gain": 6,
+  "balance_mode": 1,
   "balance_ratio_red": 1411,
   "balance_ratio_green": 1024,
   "balance_ratio_blue": 1390,

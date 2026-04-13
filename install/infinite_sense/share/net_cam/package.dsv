@@ -1,0 +1,4 @@
+source;share/video_cam_lvi/local_setup.bash
+source;share/video_cam_lvi/local_setup.dsv
+source;share/video_cam_lvi/local_setup.sh
+source;share/video_cam_lvi/local_setup.zsh
