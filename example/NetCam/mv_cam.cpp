@@ -531,23 +531,25 @@ bool MvCam::Initialization() {
 }
 
 void MvCam::Stop() {
+  // 先停止抓图，让 GetImageBuffer 立即返回错误，线程才能检查 is_running 并退出
+  for (size_t i = 0; i < handles_.size(); ++i) {
+    if (handles_[i] == nullptr) continue;
+    MV_CC_StopGrabbing(handles_[i]);
+  }
+  // 通知所有线程退出
   Disable();
-  std::this_thread::sleep_for(std::chrono::milliseconds{500});
+  // 等待所有接收线程退出
   for (auto &cam_thread : cam_threads) {
-    while (cam_thread.joinable()) {
+    if (cam_thread.joinable()) {
       cam_thread.join();
     }
   }
   cam_threads.clear();
   cam_threads.shrink_to_fit();
+  // 线程已全部退出后再关闭设备
   for (size_t i = 0; i < handles_.size(); ++i) {
     if (handles_[i] == nullptr) continue;
-    int n_ret = MV_OK;
-    n_ret = MV_CC_StopGrabbing(handles_[i]);
-    if (MV_OK != n_ret) {
-      LOG(ERROR) << "MV_CC_StopGrabbing fail! n_ret [" << n_ret << "]";
-    }
-    n_ret = MV_CC_CloseDevice(handles_[i]);
+    int n_ret = MV_CC_CloseDevice(handles_[i]);
     if (MV_OK != n_ret) {
       LOG(ERROR) << "MV_CC_CloseDevice fail! n_ret [" << n_ret << "]";
     }
