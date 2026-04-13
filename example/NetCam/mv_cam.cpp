@@ -620,7 +620,7 @@ void MvCam::Receive(void *handle, const std::string &name) {
             // 则先对原始数据调用 MV_CC_LSCCorrect，将结果写入本地临时缓冲，再把该缓冲作为像素转换的输入。
             auto calib_it = calib_map_.find(name);
             if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
-              LOG(INFO) << "Found calib_map_: " << name << "\n";
+              // LOG(INFO) << "Found calib_map_: " << name << "\n";
               // 使用局部临时缓冲，防止多线程冲突
               std::vector<unsigned char> lsc_tmp(st_out_frame.stFrameInfo.nFrameLen > 0 ? st_out_frame.stFrameInfo.nFrameLen : MAX_IMAGE_DATA_SIZE);
               MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
