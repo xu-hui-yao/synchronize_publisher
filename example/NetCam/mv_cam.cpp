@@ -552,7 +552,7 @@ void MvCam::Receive(void *handle, const std::string &name) {
   MV_FRAME_OUT st_out_frame;
   CamData cam_data;
   Messenger &messenger = Messenger::GetInstance();
-#define MAX_IMAGE_DATA_SIZE (3 * 4000 * 4000)
+#define MAX_IMAGE_DATA_SIZE (3 * 2048 * 1500)
   std::vector<unsigned char> convert_buf(MAX_IMAGE_DATA_SIZE);
   while (is_running) {
     memset(&st_out_frame, 0, sizeof(MV_FRAME_OUT));
@@ -631,7 +631,7 @@ void MvCam::Receive(void *handle, const std::string &name) {
             if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
               // LOG(INFO) << "Found calib_map_: " << name << "\n";
               // 使用局部临时缓冲，防止多线程冲突
-              lsc_tmp.resize(MAX_IMAGE_DATA_SIZE);
+              lsc_tmp.resize(MAX_IMAGE_DATA_SIZE / 3);
               MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
               stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
               stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
