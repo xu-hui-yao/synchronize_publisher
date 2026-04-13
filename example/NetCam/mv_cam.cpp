@@ -467,6 +467,7 @@ void MvCam::Stop() {
   cam_threads.clear();
   cam_threads.shrink_to_fit();
   for (size_t i = 0; i < handles_.size(); ++i) {
+    if (handles_[i] == nullptr) continue;
     int n_ret = MV_OK;
     n_ret = MV_CC_StopGrabbing(handles_[i]);
     if (MV_OK != n_ret) {
@@ -476,12 +477,8 @@ void MvCam::Stop() {
     if (MV_OK != n_ret) {
       LOG(ERROR) << "MV_CC_CloseDevice fail! n_ret [" << n_ret << "]";
     }
-    if (n_ret != MV_OK) {
-      if (!handles_[i]) {
-        MV_CC_DestroyHandle(handles_[i]);
-        handles_[i] = nullptr;
-      }
-    }
+    MV_CC_DestroyHandle(handles_[i]);
+    handles_[i] = nullptr;
     LOG(INFO) << "Exit  " << i << "  cam ";
   }
 }
