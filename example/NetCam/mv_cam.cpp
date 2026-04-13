@@ -616,13 +616,17 @@ void MvCam::Receive(void *handle, const std::string &name) {
             unsigned char* p_src_for_convert = st_out_frame.pBufAddr;
             unsigned int n_src_len_for_convert = st_out_frame.stFrameInfo.nFrameLen;
 
+            // LSC 临时缓冲必须与 p_src_for_convert 同生命周期，
+            // 否则 if 块结束后 p_src_for_convert 指向已释放内存
+            std::vector<unsigned char> lsc_tmp;
+
             // 如果配置中为该相机加载了 LSC 校准表，并且输入是 Bayer/raw 类型（IsColor 包含 Bayer），
             // 则先对原始数据调用 MV_CC_LSCCorrect，将结果写入本地临时缓冲，再把该缓冲作为像素转换的输入。
             auto calib_it = calib_map_.find(name);
             if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
               // LOG(INFO) << "Found calib_map_: " << name << "\n";
               // 使用局部临时缓冲，防止多线程冲突
-              std::vector<unsigned char> lsc_tmp(MAX_IMAGE_DATA_SIZE);
+              lsc_tmp.resize(MAX_IMAGE_DATA_SIZE);
               MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
               stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
               stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
