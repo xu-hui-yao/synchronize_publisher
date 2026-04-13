@@ -629,9 +629,9 @@ void MvCam::Receive(void *handle, const std::string &name) {
             // 则先对原始数据调用 MV_CC_LSCCorrect，将结果写入本地临时缓冲，再把该缓冲作为像素转换的输入。
             auto calib_it = calib_map_.find(name);
             if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
-              // LOG(INFO) << "Found calib_map_: " << name << "\n";
-              // 使用局部临时缓冲，防止多线程冲突
-              lsc_tmp.resize(MAX_IMAGE_DATA_SIZE / 3);
+              // LSC 输出缓冲大小必须 >= 输入帧大小，不能用 MAX_IMAGE_DATA_SIZE/3
+              const unsigned int lsc_buf_size = st_out_frame.stFrameInfo.nFrameLen;
+              lsc_tmp.resize(lsc_buf_size);
               MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
               stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
               stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
@@ -639,7 +639,7 @@ void MvCam::Receive(void *handle, const std::string &name) {
               stLSCCorr.pSrcBuf = st_out_frame.pBufAddr;
               stLSCCorr.nSrcBufLen = st_out_frame.stFrameInfo.nFrameLen;
               stLSCCorr.pDstBuf = lsc_tmp.data();
-              stLSCCorr.nDstBufSize = (unsigned int)lsc_tmp.size();
+              stLSCCorr.nDstBufSize = lsc_buf_size;
               stLSCCorr.pCalibBuf = calib_it->second.data();
               stLSCCorr.nCalibBufLen = (unsigned int)calib_it->second.size();
 
@@ -650,7 +650,8 @@ void MvCam::Receive(void *handle, const std::string &name) {
               }
               if (lret == MV_OK) {
                 p_src_for_convert = lsc_tmp.data();
-                n_src_len_for_convert = stLSCCorr.nDstBufLen;
+                // nDstBufLen 可能为0（SDK有时不填写），回退到输入帧大小
+                n_src_len_for_convert = (stLSCCorr.nDstBufLen > 0) ? stLSCCorr.nDstBufLen : lsc_buf_size;
               } else {
                 LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
               }
@@ -662,11 +663,7 @@ void MvCam::Receive(void *handle, const std::string &name) {
             stConvertParam.pDstBuffer     = convert_buf.data();  // ch:输出数据缓存 | en:output data buffer
             stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE; // ch:输出缓存大小 | en:output buffer size
             stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType; // ch:输入像素格式 | en:input pixel format
-            int nRet;
-            {
-              std::lock_guard<std::mutex> lock(g_lsc_mutex);
-              nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
-            }
+            int nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
             if (nRet != MV_OK) {
               printf("Pixel conversion failed! Error: 0x%x\n", nRet);
               continue;
