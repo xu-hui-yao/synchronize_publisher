@@ -9,8 +9,13 @@
 #include <unistd.h>     // close, ftruncate
 #include "nlohmann/json.hpp"
 #include <fstream>
+#include <mutex>
 
 namespace infinite_sense {
+
+// MV_CC_LSCCorrect (in libMediaProcess.so) is not thread-safe on some platforms (notably aarch64).
+// Serialize all calls to prevent concurrent access.
+static std::mutex g_lsc_mutex;
 
 // TODO1: 定义时间戳数据，文件开头调用
 struct time_stamp {
@@ -638,7 +643,11 @@ void MvCam::Receive(void *handle, const std::string &name) {
               stLSCCorr.pCalibBuf = calib_it->second.data();
               stLSCCorr.nCalibBufLen = (unsigned int)calib_it->second.size();
 
-              int lret = MV_CC_LSCCorrect(handle, &stLSCCorr);
+              int lret;
+              {
+                std::lock_guard<std::mutex> lock(g_lsc_mutex);
+                lret = MV_CC_LSCCorrect(handle, &stLSCCorr);
+              }
               if (lret == MV_OK) {
                 p_src_for_convert = lsc_tmp.data();
                 n_src_len_for_convert = stLSCCorr.nDstBufLen;
@@ -653,7 +662,11 @@ void MvCam::Receive(void *handle, const std::string &name) {
             stConvertParam.pDstBuffer     = convert_buf.data();  // ch:输出数据缓存 | en:output data buffer
             stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE; // ch:输出缓存大小 | en:output buffer size
             stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType; // ch:输入像素格式 | en:input pixel format
-            auto nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
+            int nRet;
+            {
+              std::lock_guard<std::mutex> lock(g_lsc_mutex);
+              nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
+            }
             if (nRet != MV_OK) {
               printf("Pixel conversion failed! Error: 0x%x\n", nRet);
               continue;
