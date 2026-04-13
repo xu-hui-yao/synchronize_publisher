@@ -252,6 +252,8 @@ bool MvCam::Initialization() {
     std::string config_path = "/home/xuhuiyao/Desktop/workfield/sync/SimpleSensorSync/camera_config.json";
     
     CameraParams params;
+    // per-camera LSC 校准文件路径映射（在 try 之外声明以便后续使用）
+    std::unordered_map<std::string, std::string> lsc_paths;
     try {
         std::ifstream config_file(config_path);
         if (!config_file.is_open()) {
@@ -261,7 +263,7 @@ bool MvCam::Initialization() {
         nlohmann::json j;
         config_file >> j;
 
-        // 从 JSON 读取参数，使用 value() 提供默认值（兼容性好）
+        // 从 JSON 读取通用相机参数，使用 value() 提供默认值（兼容性好）
         params.exposure_mode = j.value("exposure_mode", 0);
         params.exposure_time = j.value("exposure_time", 10000.0f);
         params.gain_mode = j.value("gain_mode", 0);
@@ -271,9 +273,18 @@ bool MvCam::Initialization() {
         params.balance_ratio_green = j.value("balance_ratio_green", 1024);
         params.balance_ratio_blue = j.value("balance_ratio_blue", 1404);
         params.gamma = j.value("gamma", 0.7f);
-        // params.saturation = j.value("saturation", 128);
 
         LOG(INFO) << "Loaded camera parameters from: " << config_path;
+
+        // 读取 per-camera LSC 校准文件路径映射（可选）
+        if (j.contains("lsc_calib_paths") && j["lsc_calib_paths"].is_object()) {
+          for (auto &it : j["lsc_calib_paths"].items()) {
+            if (it.value().is_string()) {
+              lsc_paths[it.key()] = it.value().get<std::string>();
+              LOG(INFO) << "Found LSC calib path for camera '" << it.key() << "': " << lsc_paths[it.key()];
+            }
+          }
+        }
     } catch (const std::exception& e) {
         LOG(ERROR) << "Failed to parse config file: " << e.what();
         return false;
@@ -327,6 +338,54 @@ bool MvCam::Initialization() {
         if (MV_OK != ret) {
             LOG(ERROR) << "MV_CC_OpenDevice fail! n_ret [" << ret << "]";
             continue;
+        }
+
+        // 获取设备的 user id (device user name)，用于按名称加载对应的 LSC 校准文件
+        MVCC_STRINGVALUE pst_value{};
+        int id_ret = MV_CC_GetDeviceUserID(handle, &pst_value);
+        std::string dev_name;
+        if (id_ret == MV_OK) {
+          dev_name = std::string(pst_value.chCurValue);
+          if (dev_name.empty()) {
+            // fallback to index-based name
+            dev_name = "cam_" + std::to_string(i);
+          }
+        } else {
+          LOG(WARNING) << "GetDeviceUserID failed for device index " << i << " n_ret [0x" << std::hex << id_ret << "]";
+          dev_name = "cam_" + std::to_string(i);
+        }
+
+        // 如果 config 指定了该相机的 LSC 校准文件路径，则加载对应二进制文件
+        auto path_it = lsc_paths.find(dev_name);
+        if (path_it != lsc_paths.end()) {
+          const std::string &calib_path = path_it->second;
+          LOG(INFO) << "Found lsc path: " << calib_path << "\n";
+          FILE* fp = fopen(calib_path.c_str(), "rb");
+          if (fp) {
+            if (fseek(fp, 0, SEEK_END) == 0) {
+              long nlen = ftell(fp);
+              if (nlen > 0) {
+                rewind(fp);
+                try {
+                  calib_map_[dev_name].resize((size_t)nlen);
+                } catch (...) {
+                  LOG(ERROR) << "Failed to allocate memory for LSCCalib for " << dev_name << " size: " << nlen;
+                }
+                if (!calib_map_[dev_name].empty()) {
+                  size_t read_len = fread(calib_map_[dev_name].data(), 1, calib_map_[dev_name].size(), fp);
+                  if ((long)read_len == nlen) {
+                    LOG(INFO) << "Loaded LSC calib (" << read_len << " bytes) for camera '" << dev_name << "' from: " << calib_path;
+                  } else {
+                    LOG(WARNING) << "LSC calib read size mismatch for " << dev_name << ", read: " << read_len << " expected: " << nlen;
+                    calib_map_.erase(dev_name);
+                  }
+                }
+              }
+            }
+            fclose(fp);
+          } else {
+            LOG(WARNING) << "Failed to open LSC calib file for camera '" << dev_name << "' : " << calib_path;
+          }
         }
 
         // GigE: 设置最佳包大小
@@ -392,6 +451,7 @@ bool MvCam::Initialization() {
     }
 
     // === Step 5: 对第一个相机执行一次自动白平衡，然后将结果复制给所有相机 ===
+    LOG(INFO) << "Performing one-time auto white balance on camera 0 to synchronize WB across all cameras...";
     if (!handles_.empty() && handles_[0] != nullptr) {
         // 对第一个相机设置白平衡模式为 Once (1)
         int wb_ret = MV_CC_SetBalanceWhiteAuto(handles_[0], 1);
@@ -523,13 +583,18 @@ void MvCam::Receive(void *handle, const std::string &name) {
       unsigned int n_channel_num = 0;
       // 如果是彩色则转成BGR8
       if (IsColor(st_out_frame.stFrameInfo.enPixelType)) {
+        // LOG(INFO) << "Color image detected, converting to BGR8 format.";
         n_channel_num = 3;
         en_dst_pixel_type = PixelType_Gvsp_BGR8_Packed;
       }
       // 如果是黑白则转换成Mono8
       else if (IsMono(st_out_frame.stFrameInfo.enPixelType)) {
+        // LOG(INFO) << "Monochrome image detected, converting to Mono8 format.";
         n_channel_num = 1;
         en_dst_pixel_type = PixelType_Gvsp_Mono8;
+      }
+      else {
+        LOG(ERROR) << "Unsupported pixel format: " << st_out_frame.stFrameInfo.enPixelType;
       }
       if (n_channel_num != 0) {
         cam_data.name = name;
@@ -543,20 +608,52 @@ void MvCam::Receive(void *handle, const std::string &name) {
           // // cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
           // //                       GMatType<uint8_t, 3>::Type, st_out_frame.pBufAddr)
           // //                      .Clone();
-          MV_CC_PIXEL_CONVERT_PARAM stConvertParam{};
-          stConvertParam.nWidth      = st_out_frame.stFrameInfo.nWidth;            // ch:图像宽 | en:image width
-          stConvertParam.nHeight     = st_out_frame.stFrameInfo.nHeight;           // ch:图像高 | en:image height
-          stConvertParam.pSrcData    = st_out_frame.pBufAddr;               // ch:输入数据缓存 | en:input data buffer
-          stConvertParam.nSrcDataLen = st_out_frame.stFrameInfo.nFrameLen;         // ch:输入数据大小 | en:input data size
-          stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed; // ch:输出像素格式 | en:output pixel format
-          stConvertParam.pDstBuffer     = convert_buf.data();  // ch:输出数据缓存 | en:output data buffer
-          stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE; // ch:输出缓存大小 | en:output buffer size
-          stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType; // ch:输入像素格式 | en:input pixel format
-          auto nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
-          if (nRet != MV_OK) {
+            MV_CC_PIXEL_CONVERT_PARAM stConvertParam{};
+            stConvertParam.nWidth      = st_out_frame.stFrameInfo.nWidth;            // ch:图像宽 | en:image width
+            stConvertParam.nHeight     = st_out_frame.stFrameInfo.nHeight;           // ch:图像高 | en:image height
+
+            // 默认使用相机返回的原始缓冲作为像素转换的输入
+            unsigned char* p_src_for_convert = st_out_frame.pBufAddr;
+            unsigned int n_src_len_for_convert = st_out_frame.stFrameInfo.nFrameLen;
+
+            // 如果配置中为该相机加载了 LSC 校准表，并且输入是 Bayer/raw 类型（IsColor 包含 Bayer），
+            // 则先对原始数据调用 MV_CC_LSCCorrect，将结果写入本地临时缓冲，再把该缓冲作为像素转换的输入。
+            auto calib_it = calib_map_.find(name);
+            if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
+              LOG(INFO) << "Found calib_map_: " << name << "\n";
+              // 使用局部临时缓冲，防止多线程冲突
+              std::vector<unsigned char> lsc_tmp(st_out_frame.stFrameInfo.nFrameLen > 0 ? st_out_frame.stFrameInfo.nFrameLen : MAX_IMAGE_DATA_SIZE);
+              MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
+              stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
+              stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
+              stLSCCorr.enPixelType = st_out_frame.stFrameInfo.enPixelType;
+              stLSCCorr.pSrcBuf = st_out_frame.pBufAddr;
+              stLSCCorr.nSrcBufLen = st_out_frame.stFrameInfo.nFrameLen;
+              stLSCCorr.pDstBuf = lsc_tmp.data();
+              stLSCCorr.nDstBufSize = (unsigned int)lsc_tmp.size();
+              stLSCCorr.pCalibBuf = calib_it->second.data();
+              stLSCCorr.nCalibBufLen = (unsigned int)calib_it->second.size();
+
+              int lret = MV_CC_LSCCorrect(handle, &stLSCCorr);
+              if (lret == MV_OK) {
+                p_src_for_convert = lsc_tmp.data();
+                n_src_len_for_convert = stLSCCorr.nDstBufLen;
+              } else {
+                LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
+              }
+            }
+
+            stConvertParam.pSrcData    = p_src_for_convert;               // ch:输入数据缓存 | en:input data buffer
+            stConvertParam.nSrcDataLen = n_src_len_for_convert;         // ch:输入数据大小 | en:input data size
+            stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed; // ch:输出像素格式 | en:output pixel format
+            stConvertParam.pDstBuffer     = convert_buf.data();  // ch:输出数据缓存 | en:output data buffer
+            stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE; // ch:输出缓存大小 | en:output buffer size
+            stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType; // ch:输入像素格式 | en:input pixel format
+            auto nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
+            if (nRet != MV_OK) {
               printf("Pixel conversion failed! Error: 0x%x\n", nRet);
               continue;
-          }
+            }
           cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
                                 GMatType<uint8_t, 3>::Type, convert_buf.data())
                                .Clone();

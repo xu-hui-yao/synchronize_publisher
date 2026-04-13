@@ -1,5 +1,7 @@
 #pragma once
 #include "infinite_sense.h"
+#include <unordered_map>
+#include <string>
 namespace infinite_sense {
 class MvCam final : public Sensor {
  public:
@@ -13,6 +15,8 @@ class MvCam final : public Sensor {
   void Receive(void* handle, const std::string&) override;
   std::vector<int> rets_;
   std::vector<void*> handles_;
+  // Per-camera LSC calibration buffers, keyed by device user ID (camera name)
+  std::unordered_map<std::string, std::vector<unsigned char>> calib_map_;
 };
 
 struct CameraParams {

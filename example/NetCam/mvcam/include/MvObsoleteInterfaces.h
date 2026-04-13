@@ -222,7 +222,7 @@ MV_CAMCTRL_API int __stdcall MV_CC_GetOneFrameEx(IN void* handle, IN OUT unsigne
  *  @return �ɹ�������MV_OK�����󣬷��ش�����
  
  *  @fn         MV_CC_RegisterImageCallBack
- *  @brief      Register image data callback (This interface is abandoned, it is recommended to use the MV_CC_RegisterImageCallBackEx)
+ *  @brief      Register image data callback (This interface is abandoned, it is recommended to use the MV_CC_Register-)
  *  @param       handle                 [IN]          Handle
  *  @param       cbOutput               [IN]          Callback function pointer
  *  @param       pUser                  [IN]          User defined variable
