@@ -563,6 +563,8 @@ void MvCam::Receive(void *handle, const std::string &name) {
   Messenger &messenger = Messenger::GetInstance();
 #define MAX_IMAGE_DATA_SIZE (3 * 2048 * 1500)
   std::vector<unsigned char> convert_buf(MAX_IMAGE_DATA_SIZE);
+  // 预分配 LSC 临时缓冲，避免每帧 malloc/free，大小按最大帧预留
+  std::vector<unsigned char> lsc_tmp(MAX_IMAGE_DATA_SIZE);
   while (is_running) {
     memset(&st_out_frame, 0, sizeof(MV_FRAME_OUT));
     int n_ret = MV_CC_GetImageBuffer(handle, &st_out_frame, 10);
@@ -630,17 +632,14 @@ void MvCam::Receive(void *handle, const std::string &name) {
             unsigned char* p_src_for_convert = st_out_frame.pBufAddr;
             unsigned int n_src_len_for_convert = st_out_frame.stFrameInfo.nFrameLen;
 
-            // LSC 临时缓冲必须与 p_src_for_convert 同生命周期，
-            // 否则 if 块结束后 p_src_for_convert 指向已释放内存
-            std::vector<unsigned char> lsc_tmp;
-
-            // 如果配置中为该相机加载了 LSC 校准表，并且输入是 Bayer/raw 类型（IsColor 包含 Bayer），
-            // 则先对原始数据调用 MV_CC_LSCCorrect，将结果写入本地临时缓冲，再把该缓冲作为像素转换的输入。
+            // 如果配置中为该相机加载了 LSC 校准表，则先矫正再转换像素格式
             auto calib_it = calib_map_.find(name);
             if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
-              // LSC 输出缓冲大小必须 >= 输入帧大小，不能用 MAX_IMAGE_DATA_SIZE/3
               const unsigned int lsc_buf_size = st_out_frame.stFrameInfo.nFrameLen;
-              lsc_tmp.resize(lsc_buf_size);
+              // lsc_tmp 已在循环外预分配，只在帧变大时才扩容
+              if (lsc_tmp.size() < lsc_buf_size) {
+                lsc_tmp.resize(lsc_buf_size);
+              }
               MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
               stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
               stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
@@ -648,7 +647,7 @@ void MvCam::Receive(void *handle, const std::string &name) {
               stLSCCorr.pSrcBuf = st_out_frame.pBufAddr;
               stLSCCorr.nSrcBufLen = st_out_frame.stFrameInfo.nFrameLen;
               stLSCCorr.pDstBuf = lsc_tmp.data();
-              stLSCCorr.nDstBufSize = lsc_buf_size;
+              stLSCCorr.nDstBufSize = (unsigned int)lsc_tmp.size();
               stLSCCorr.pCalibBuf = calib_it->second.data();
               stLSCCorr.nCalibBufLen = (unsigned int)calib_it->second.size();
 
@@ -659,19 +658,18 @@ void MvCam::Receive(void *handle, const std::string &name) {
               }
               if (lret == MV_OK) {
                 p_src_for_convert = lsc_tmp.data();
-                // nDstBufLen 可能为0（SDK有时不填写），回退到输入帧大小
                 n_src_len_for_convert = (stLSCCorr.nDstBufLen > 0) ? stLSCCorr.nDstBufLen : lsc_buf_size;
               } else {
                 LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
               }
             }
 
-            stConvertParam.pSrcData    = p_src_for_convert;               // ch:输入数据缓存 | en:input data buffer
-            stConvertParam.nSrcDataLen = n_src_len_for_convert;         // ch:输入数据大小 | en:input data size
-            stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed; // ch:输出像素格式 | en:output pixel format
-            stConvertParam.pDstBuffer     = convert_buf.data();  // ch:输出数据缓存 | en:output data buffer
-            stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE; // ch:输出缓存大小 | en:output buffer size
-            stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType; // ch:输入像素格式 | en:input pixel format
+            stConvertParam.pSrcData    = p_src_for_convert;
+            stConvertParam.nSrcDataLen = n_src_len_for_convert;
+            stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
+            stConvertParam.pDstBuffer     = convert_buf.data();
+            stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE;
+            stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType;
             int nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
             if (nRet != MV_OK) {
               printf("Pixel conversion failed! Error: 0x%x\n", nRet);
