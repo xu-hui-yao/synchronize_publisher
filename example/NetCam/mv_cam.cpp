@@ -557,152 +557,149 @@ void MvCam::Receive(void *handle, const std::string &name) {
   while (is_running) {
     memset(&st_out_frame, 0, sizeof(MV_FRAME_OUT));
     int n_ret = MV_CC_GetImageBuffer(handle, &st_out_frame, 10);
-    if (n_ret == MV_OK) {
-      MVCC_FLOATVALUE expose_time;
-      n_ret = MV_CC_GetExposureTime(handle, &expose_time);
-      if (n_ret != MV_OK) {
-        LOG(ERROR) << "Get ExposureTime fail! n_ret [0x" << std::hex << n_ret << "]";
-      }
-      // 将相机报告的曝光时间保存（单位为微秒），并在计算时间戳时使用曝光时间的一半
-      cam_data.exposure_time_us = static_cast<uint64_t>(expose_time.fCurValue);
-      // 这里的time_stamp_us是相机触发时间，需要加上曝光时间的一半，以获得相机拍摄的时间
-      if (params.find(name) == params.end()) {
-        LOG(ERROR) << "cam: " << name << " not found!";
-      } else {
-        if (uint64_t time; GET_LAST_TRIGGER_STATUS(params[name], time)) {
-          cam_data.time_stamp_us = time + static_cast<uint64_t>(expose_time.fCurValue / 2.);
-        } else {
-          LOG(ERROR) << "Trigger cam: " << name << " not found!";
+    if (n_ret != MV_OK) {
+      std::this_thread::sleep_for(std::chrono::milliseconds{2});
+      continue;
+    }
+
+    // 确保无论处理是否成功，都会释放 image buffer，防止 SDK 内部内存泄漏导致崩溃
+    auto free_image_buffer = [&]() {
+      if (nullptr != st_out_frame.pBufAddr) {
+        int free_ret = MV_CC_FreeImageBuffer(handle, &st_out_frame);
+        if (free_ret != MV_OK) {
+          LOG(ERROR) << "Free Image Buffer fail! n_ret [0x" << std::hex << free_ret << "]";
         }
       }
-      
-      // TODO3: 获取当前时间戳信息
-		  if(pointt != MAP_FAILED && pointt->low != 0)
-		  {
-			  // 赋值共享内存中的时间戳给相机帧
-		    cam_data.time_stamp_us = pointt->low;
-        // LOG(INFO) << "time_stamp_s: " << cam_data.time_stamp_us/1000000 << " not found!";
-		  }
+    };
 
-      MvGvspPixelType en_dst_pixel_type = PixelType_Gvsp_Undefined;
-      unsigned int n_channel_num = 0;
-      // 如果是彩色则转成BGR8
-      if (IsColor(st_out_frame.stFrameInfo.enPixelType)) {
-        // LOG(INFO) << "Color image detected, converting to BGR8 format.";
-        n_channel_num = 3;
-        en_dst_pixel_type = PixelType_Gvsp_BGR8_Packed;
+    MVCC_FLOATVALUE expose_time;
+    n_ret = MV_CC_GetExposureTime(handle, &expose_time);
+    if (n_ret != MV_OK) {
+      LOG(ERROR) << "Get ExposureTime fail! n_ret [0x" << std::hex << n_ret << "]";
+    }
+    // 将相机报告的曝光时间保存（单位为微秒），并在计算时间戳时使用曝光时间的一半
+    cam_data.exposure_time_us = static_cast<uint64_t>(expose_time.fCurValue);
+    // 这里的time_stamp_us是相机触发时间，需要加上曝光时间的一半，以获得相机拍摄的时间
+    if (params.find(name) == params.end()) {
+      LOG(ERROR) << "cam: " << name << " not found!";
+    } else {
+      if (uint64_t time; GET_LAST_TRIGGER_STATUS(params[name], time)) {
+        cam_data.time_stamp_us = time + static_cast<uint64_t>(expose_time.fCurValue / 2.);
+      } else {
+        LOG(ERROR) << "Trigger cam: " << name << " not found!";
       }
-      // 如果是黑白则转换成Mono8
-      else if (IsMono(st_out_frame.stFrameInfo.enPixelType)) {
-        // LOG(INFO) << "Monochrome image detected, converting to Mono8 format.";
-        n_channel_num = 1;
-        en_dst_pixel_type = PixelType_Gvsp_Mono8;
-      }
-      else {
-        LOG(ERROR) << "Unsupported pixel format: " << st_out_frame.stFrameInfo.enPixelType;
-      }
-      if (n_channel_num != 0) {
-        cam_data.name = name;
-        if (en_dst_pixel_type == PixelType_Gvsp_BGR8_Packed) {
-          // cv::Mat out_image;
-          // cv::Mat cv_image = cv::Mat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,CV_8UC1, st_out_frame.pBufAddr);
-          // // cv::cvtColor(cv_image, out_image, cv::COLOR_BayerBG2GRAY);
-          // // cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,CV_8UC1, out_image.data);
-          // cv::cvtColor(cv_image, out_image, cv::COLOR_BayerBG2BGR);
-          // cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,CV_8UC3, out_image.data);
-          // // cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
-          // //                       GMatType<uint8_t, 3>::Type, st_out_frame.pBufAddr)
-          // //                      .Clone();
-            MV_CC_PIXEL_CONVERT_PARAM stConvertParam{};
-            stConvertParam.nWidth      = st_out_frame.stFrameInfo.nWidth;            // ch:图像宽 | en:image width
-            stConvertParam.nHeight     = st_out_frame.stFrameInfo.nHeight;           // ch:图像高 | en:image height
+    }
 
-            // 默认使用相机返回的原始缓冲作为像素转换的输入
-            unsigned char* p_src_for_convert = st_out_frame.pBufAddr;
-            unsigned int n_src_len_for_convert = st_out_frame.stFrameInfo.nFrameLen;
+    // TODO3: 获取当前时间戳信息
+    if(pointt != MAP_FAILED && pointt->low != 0)
+    {
+      // 赋值共享内存中的时间戳给相机帧
+      cam_data.time_stamp_us = pointt->low;
+      // LOG(INFO) << "time_stamp_s: " << cam_data.time_stamp_us/1000000 << " not found!";
+    }
 
-            // LSC 临时缓冲必须与 p_src_for_convert 同生命周期，
-            // 否则 if 块结束后 p_src_for_convert 指向已释放内存
-            std::vector<unsigned char> lsc_tmp;
+    MvGvspPixelType en_dst_pixel_type = PixelType_Gvsp_Undefined;
+    unsigned int n_channel_num = 0;
+    // 如果是彩色则转成BGR8
+    if (IsColor(st_out_frame.stFrameInfo.enPixelType)) {
+      n_channel_num = 3;
+      en_dst_pixel_type = PixelType_Gvsp_BGR8_Packed;
+    }
+    // 如果是黑白则转换成Mono8
+    else if (IsMono(st_out_frame.stFrameInfo.enPixelType)) {
+      n_channel_num = 1;
+      en_dst_pixel_type = PixelType_Gvsp_Mono8;
+    }
+    else {
+      LOG(ERROR) << "Unsupported pixel format: " << st_out_frame.stFrameInfo.enPixelType;
+    }
+    if (n_channel_num != 0) {
+      cam_data.name = name;
+      if (en_dst_pixel_type == PixelType_Gvsp_BGR8_Packed) {
+          MV_CC_PIXEL_CONVERT_PARAM stConvertParam{};
+          stConvertParam.nWidth      = st_out_frame.stFrameInfo.nWidth;
+          stConvertParam.nHeight     = st_out_frame.stFrameInfo.nHeight;
 
-            // 如果配置中为该相机加载了 LSC 校准表，并且输入是 Bayer/raw 类型（IsColor 包含 Bayer），
-            // 则先对原始数据调用 MV_CC_LSCCorrect，将结果写入本地临时缓冲，再把该缓冲作为像素转换的输入。
-            auto calib_it = calib_map_.find(name);
-            if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
-              // LOG(INFO) << "Found calib_map_: " << name << "\n";
-              // 使用局部临时缓冲，防止多线程冲突
-              lsc_tmp.resize(MAX_IMAGE_DATA_SIZE);
-              MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
-              stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
-              stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
-              stLSCCorr.enPixelType = st_out_frame.stFrameInfo.enPixelType;
-              stLSCCorr.pSrcBuf = st_out_frame.pBufAddr;
-              stLSCCorr.nSrcBufLen = st_out_frame.stFrameInfo.nFrameLen;
-              stLSCCorr.pDstBuf = lsc_tmp.data();
-              stLSCCorr.nDstBufSize = (unsigned int)lsc_tmp.size();
-              stLSCCorr.pCalibBuf = calib_it->second.data();
-              stLSCCorr.nCalibBufLen = (unsigned int)calib_it->second.size();
+          // 默认使用相机返回的原始缓冲作为像素转换的输入
+          unsigned char* p_src_for_convert = st_out_frame.pBufAddr;
+          unsigned int n_src_len_for_convert = st_out_frame.stFrameInfo.nFrameLen;
 
-              int lret;
-              {
-                std::lock_guard<std::mutex> lock(g_lsc_mutex);
-                lret = MV_CC_LSCCorrect(handle, &stLSCCorr);
-              }
-              if (lret == MV_OK) {
-                p_src_for_convert = lsc_tmp.data();
-                n_src_len_for_convert = stLSCCorr.nDstBufLen;
-              } else {
-                LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
-              }
-            }
+          // LSC 临时缓冲必须与 p_src_for_convert 同生命周期，
+          // 否则 if 块结束后 p_src_for_convert 指向已释放内存
+          std::vector<unsigned char> lsc_tmp;
 
-            stConvertParam.pSrcData    = p_src_for_convert;               // ch:输入数据缓存 | en:input data buffer
-            stConvertParam.nSrcDataLen = n_src_len_for_convert;         // ch:输入数据大小 | en:input data size
-            stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed; // ch:输出像素格式 | en:output pixel format
-            stConvertParam.pDstBuffer     = convert_buf.data();  // ch:输出数据缓存 | en:output data buffer
-            stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE; // ch:输出缓存大小 | en:output buffer size
-            stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType; // ch:输入像素格式 | en:input pixel format
-            int nRet;
+          // 如果配置中为该相机加载了 LSC 校准表，并且输入是 Bayer/raw 类型（IsColor 包含 Bayer），
+          // 则先对原始数据调用 MV_CC_LSCCorrect，将结果写入本地临时缓冲，再把该缓冲作为像素转换的输入。
+          auto calib_it = calib_map_.find(name);
+          if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
+            lsc_tmp.resize(MAX_IMAGE_DATA_SIZE);
+            MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
+            stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
+            stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
+            stLSCCorr.enPixelType = st_out_frame.stFrameInfo.enPixelType;
+            stLSCCorr.pSrcBuf = st_out_frame.pBufAddr;
+            stLSCCorr.nSrcBufLen = st_out_frame.stFrameInfo.nFrameLen;
+            stLSCCorr.pDstBuf = lsc_tmp.data();
+            stLSCCorr.nDstBufSize = (unsigned int)lsc_tmp.size();
+            stLSCCorr.pCalibBuf = calib_it->second.data();
+            stLSCCorr.nCalibBufLen = (unsigned int)calib_it->second.size();
+
+            int lret;
             {
               std::lock_guard<std::mutex> lock(g_lsc_mutex);
-              nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
+              lret = MV_CC_LSCCorrect(handle, &stLSCCorr);
             }
-            if (nRet != MV_OK) {
-              printf("Pixel conversion failed! Error: 0x%x\n", nRet);
-              continue;
+            if (lret == MV_OK) {
+              p_src_for_convert = lsc_tmp.data();
+              n_src_len_for_convert = stLSCCorr.nDstBufLen;
+            } else {
+              LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
             }
-          cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
-                                GMatType<uint8_t, 3>::Type, convert_buf.data())
-                               .Clone();
-        }
-        if (en_dst_pixel_type == PixelType_Gvsp_Mono8) {
-          cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
-                                GMatType<uint8_t, 1>::Type, st_out_frame.pBufAddr)
-                               .Clone();
-        }
-        if (en_dst_pixel_type == PixelType_Gvsp_RGB8_Packed) {
-          cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
-                                GMatType<uint8_t, 3>::Type, st_out_frame.pBufAddr)
-                               .Clone();
-        }
-        messenger.PubStruct(name, &cam_data, sizeof(cam_data));
-        if (last_count == 0) {
-          last_count = st_out_frame.stFrameInfo.nFrameNum;
-        } else {
-          last_count++;
-          if (last_count != st_out_frame.stFrameInfo.nFrameNum) {
-            LOG(WARNING) << "Loss of data from cam connection : " << last_count;
-            last_count = 0;
           }
+
+          stConvertParam.pSrcData    = p_src_for_convert;
+          stConvertParam.nSrcDataLen = n_src_len_for_convert;
+          stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
+          stConvertParam.pDstBuffer     = convert_buf.data();
+          stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE;
+          stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType;
+          int nRet;
+          {
+            std::lock_guard<std::mutex> lock(g_lsc_mutex);
+            nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
+          }
+          if (nRet != MV_OK) {
+            printf("Pixel conversion failed! Error: 0x%x\n", nRet);
+            free_image_buffer();
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+            continue;
+          }
+        cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
+                              GMatType<uint8_t, 3>::Type, convert_buf.data())
+                             .Clone();
+      }
+      if (en_dst_pixel_type == PixelType_Gvsp_Mono8) {
+        cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
+                              GMatType<uint8_t, 1>::Type, st_out_frame.pBufAddr)
+                             .Clone();
+      }
+      if (en_dst_pixel_type == PixelType_Gvsp_RGB8_Packed) {
+        cam_data.image = GMat(st_out_frame.stFrameInfo.nHeight, st_out_frame.stFrameInfo.nWidth,
+                              GMatType<uint8_t, 3>::Type, st_out_frame.pBufAddr)
+                             .Clone();
+      }
+      messenger.PubStruct(name, &cam_data, sizeof(cam_data));
+      if (last_count == 0) {
+        last_count = st_out_frame.stFrameInfo.nFrameNum;
+      } else {
+        last_count++;
+        if (last_count != st_out_frame.stFrameInfo.nFrameNum) {
+          LOG(WARNING) << "Loss of data from cam connection : " << last_count;
+          last_count = 0;
         }
       }
     }
-    if (nullptr != st_out_frame.pBufAddr) {
-      n_ret = MV_CC_FreeImageBuffer(handle, &st_out_frame);
-      if (n_ret != MV_OK) {
-        LOG(ERROR) << "Free Image Buffer fail! n_ret [0x" << std::hex << n_ret << "]";
-      }
-    }
+    free_image_buffer();
     std::this_thread::sleep_for(std::chrono::milliseconds{2});
   }
 }
