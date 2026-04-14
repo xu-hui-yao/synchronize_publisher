@@ -611,7 +611,6 @@ void MvCam::Receive(void *handle, const std::string &name) {
       // LOG(INFO) << "time_stamp_s: " << cam_data.time_stamp_us/1000000 << " not found!";
     }
 
-<<<<<<< HEAD
     MvGvspPixelType en_dst_pixel_type = PixelType_Gvsp_Undefined;
     unsigned int n_channel_num = 0;
     // 如果是彩色则转成BGR8
@@ -668,52 +667,6 @@ void MvCam::Receive(void *handle, const std::string &name) {
               n_src_len_for_convert = stLSCCorr.nDstBufLen;
             } else {
               LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
-=======
-            // 如果配置中为该相机加载了 LSC 校准表，则先矫正再转换像素格式
-            auto calib_it = calib_map_.find(name);
-            if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
-              const unsigned int lsc_buf_size = st_out_frame.stFrameInfo.nFrameLen;
-              // lsc_tmp 已在循环外预分配，只在帧变大时才扩容
-              if (lsc_tmp.size() < lsc_buf_size) {
-                lsc_tmp.resize(lsc_buf_size);
-              }
-              MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
-              stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
-              stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
-              stLSCCorr.enPixelType = st_out_frame.stFrameInfo.enPixelType;
-              stLSCCorr.pSrcBuf = st_out_frame.pBufAddr;
-              stLSCCorr.nSrcBufLen = st_out_frame.stFrameInfo.nFrameLen;
-              stLSCCorr.pDstBuf = lsc_tmp.data();
-              stLSCCorr.nDstBufSize = (unsigned int)lsc_tmp.size();
-              stLSCCorr.pCalibBuf = calib_it->second.data();
-              stLSCCorr.nCalibBufLen = (unsigned int)calib_it->second.size();
-
-              int lret;
-              {
-                std::lock_guard<std::mutex> lock(g_lsc_mutex);
-                lret = MV_CC_LSCCorrect(handle, &stLSCCorr);
-              }
-              if (lret == MV_OK) {
-                p_src_for_convert = lsc_tmp.data();
-                n_src_len_for_convert = (stLSCCorr.nDstBufLen > 0) ? stLSCCorr.nDstBufLen : lsc_buf_size;
-              } else {
-                LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
-              }
-            }
-
-            stConvertParam.pSrcData    = p_src_for_convert;
-            stConvertParam.nSrcDataLen = n_src_len_for_convert;
-            stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
-            stConvertParam.pDstBuffer     = convert_buf.data();
-            stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE;
-            stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType;
-            int nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
-            if (nRet != MV_OK) {
-              printf("Pixel conversion failed! Error: 0x%x\n", nRet);
-              // 不能 continue，必须先 FreeImageBuffer 再跳出
-              MV_CC_FreeImageBuffer(handle, &st_out_frame);
-              continue;
->>>>>>> ec1b558c99fbb61fd18060f6e5d2157dd585ef0e
             }
           }
 
