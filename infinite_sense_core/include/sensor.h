@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <thread>
 #include <vector>
 #include "messenger.h"
@@ -24,7 +25,7 @@ class Sensor {
   virtual void Receive(void *, const std::string &) = 0;
 
  protected:
-  bool is_running{false};
+  std::atomic<bool> is_running{false};
   std::vector<std::thread> cam_threads{};
   std::map<std::string, TriggerDevice> params{};
 };

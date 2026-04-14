@@ -5,7 +5,7 @@
 	"cam_3": "/home/xuhuiyao/Desktop/workfield/sync/SimpleSensorSync/cam3/LSCCalib_cam3.bin"
 	},
   "exposure_mode": 0,
-  "exposure_time": 2000.0,
+  "exposure_time": 20000.0,
   "ideal_brightness": 100.0,
   "alpha": 0.3,
   "gain_mode": 0,

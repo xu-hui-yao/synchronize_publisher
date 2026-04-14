@@ -446,99 +446,110 @@ bool MvCam::Initialization() {
         // ret = MV_CC_SetGamma(handle, params.gamma);
         // if (MV_OK != ret) LOG(ERROR) << "SetGamma fail! n_ret [" << ret << "]";
 
-        // 启动抓图
-        ret = MV_CC_StartGrabbing(handle);
-        if (MV_OK != ret) {
-            LOG(ERROR) << "MV_CC_StartGrabbing fail! n_ret [" << ret << "]";
-        }
-
         LOG(INFO) << "Camera " << i << " initialized with config.";
     }
 
-    // === Step 5: 对第一个相机执行一次自动白平衡，然后将结果复制给所有相机 ===
-    LOG(INFO) << "Performing one-time auto white balance on camera 0 to synchronize WB across all cameras...";
+    // === Step 5: 在 StartGrabbing 之前完成自动白平衡，避免等待期间 SDK 缓冲区堆积 ===
+    // 对第一个相机执行一次 Once 自动白平衡，读取结果后应用到所有相机，再统一 StartGrabbing
+    LOG(INFO) << "Performing one-time auto white balance on camera 0 (before grabbing)...";
     if (!handles_.empty() && handles_[0] != nullptr) {
-        // 对第一个相机设置白平衡模式为 Once (1)
-        int wb_ret = MV_CC_SetBalanceWhiteAuto(handles_[0], 1);
-        if (MV_OK != wb_ret) {
-            LOG(ERROR) << "SetBalanceWhiteAuto(Once) on cam 0 fail! n_ret [" << wb_ret << "]";
+        // 先临时启动抓图（WB Once 需要相机采集帧才能计算），但只针对第一个相机
+        int sg_ret = MV_CC_StartGrabbing(handles_[0]);
+        if (MV_OK != sg_ret) {
+            LOG(ERROR) << "MV_CC_StartGrabbing (WB) on cam 0 fail! n_ret [" << sg_ret << "]";
         } else {
-            LOG(INFO) << "White balance auto (once) triggered on camera 0, waiting for completion...";
+            int wb_ret = MV_CC_SetBalanceWhiteAuto(handles_[0], 1);
+            if (MV_OK != wb_ret) {
+                LOG(ERROR) << "SetBalanceWhiteAuto(Once) on cam 0 fail! n_ret [" << wb_ret << "]";
+            } else {
+                LOG(INFO) << "White balance auto (once) triggered on camera 0, waiting for completion...";
 
-            // 等待自动白平衡完成：轮询直到模式回到 Off (0)
-            MVCC_ENUMVALUE wb_status{};
-            for (int wait = 0; wait < 100; ++wait) {
-                std::this_thread::sleep_for(std::chrono::milliseconds{100});
-                wb_ret = MV_CC_GetBalanceWhiteAuto(handles_[0], &wb_status);
-                if (wb_ret == MV_OK && wb_status.nCurValue == 0) {
-                    LOG(INFO) << "White balance auto (once) completed on camera 0.";
-                    break;
+                // 等待自动白平衡完成：轮询直到模式回到 Off (0)，同时丢帧避免缓冲区满
+                MVCC_ENUMVALUE wb_status{};
+                MV_FRAME_OUT wb_frame{};
+                for (int wait = 0; wait < 100; ++wait) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+                    // 主动取帧并立即释放，防止 SDK 内部 100 节点缓冲填满
+                    memset(&wb_frame, 0, sizeof(wb_frame));
+                    if (MV_CC_GetImageBuffer(handles_[0], &wb_frame, 5) == MV_OK) {
+                        MV_CC_FreeImageBuffer(handles_[0], &wb_frame);
+                    }
+                    wb_ret = MV_CC_GetBalanceWhiteAuto(handles_[0], &wb_status);
+                    if (wb_ret == MV_OK && wb_status.nCurValue == 0) {
+                        LOG(INFO) << "White balance auto (once) completed on camera 0.";
+                        break;
+                    }
                 }
             }
+            MV_CC_StopGrabbing(handles_[0]);
+        }
 
-            // 读取第一个相机的白平衡 R/G/B 数值
-            MVCC_INTVALUE wb_red{}, wb_green{}, wb_blue{};
-            bool wb_read_ok = true;
+        // 读取第一个相机的白平衡 R/G/B 数值
+        MVCC_INTVALUE wb_red{}, wb_green{}, wb_blue{};
+        bool wb_read_ok = true;
+        int wb_ret = MV_OK;
 
-            wb_ret = MV_CC_GetBalanceRatioRed(handles_[0], &wb_red);
-            if (MV_OK != wb_ret) { LOG(ERROR) << "GetBalanceRatioRed fail!"; wb_read_ok = false; }
+        wb_ret = MV_CC_GetBalanceRatioRed(handles_[0], &wb_red);
+        if (MV_OK != wb_ret) { LOG(ERROR) << "GetBalanceRatioRed fail!"; wb_read_ok = false; }
 
-            wb_ret = MV_CC_GetBalanceRatioGreen(handles_[0], &wb_green);
-            if (MV_OK != wb_ret) { LOG(ERROR) << "GetBalanceRatioGreen fail!"; wb_read_ok = false; }
+        wb_ret = MV_CC_GetBalanceRatioGreen(handles_[0], &wb_green);
+        if (MV_OK != wb_ret) { LOG(ERROR) << "GetBalanceRatioGreen fail!"; wb_read_ok = false; }
 
-            wb_ret = MV_CC_GetBalanceRatioBlue(handles_[0], &wb_blue);
-            if (MV_OK != wb_ret) { LOG(ERROR) << "GetBalanceRatioBlue fail!"; wb_read_ok = false; }
+        wb_ret = MV_CC_GetBalanceRatioBlue(handles_[0], &wb_blue);
+        if (MV_OK != wb_ret) { LOG(ERROR) << "GetBalanceRatioBlue fail!"; wb_read_ok = false; }
 
-            if (wb_read_ok) {
-                LOG(INFO) << "White balance from camera 0: R=" << wb_red.nCurValue
-                          << " G=" << wb_green.nCurValue << " B=" << wb_blue.nCurValue;
+        if (wb_read_ok) {
+            LOG(INFO) << "White balance from camera 0: R=" << wb_red.nCurValue
+                      << " G=" << wb_green.nCurValue << " B=" << wb_blue.nCurValue;
 
-                // 将白平衡数值应用到所有相机（包括第一个，设为手动模式保持一致）
-                for (size_t i = 0; i < handles_.size(); ++i) {
-                    if (handles_[i] == nullptr) continue;
-
-                    // 关闭自动白平衡
-                    MV_CC_SetBalanceWhiteAuto(handles_[i], 0);
-
-                    wb_ret = MV_CC_SetBalanceRatioRed(handles_[i], wb_red.nCurValue);
-                    if (MV_OK != wb_ret) LOG(ERROR) << "SetBalanceRatioRed on cam " << i << " fail!";
-
-                    wb_ret = MV_CC_SetBalanceRatioGreen(handles_[i], wb_green.nCurValue);
-                    if (MV_OK != wb_ret) LOG(ERROR) << "SetBalanceRatioGreen on cam " << i << " fail!";
-
-                    wb_ret = MV_CC_SetBalanceRatioBlue(handles_[i], wb_blue.nCurValue);
-                    if (MV_OK != wb_ret) LOG(ERROR) << "SetBalanceRatioBlue on cam " << i << " fail!";
-
-                    LOG(INFO) << "White balance applied to camera " << i
-                              << ": R=" << wb_red.nCurValue << " G=" << wb_green.nCurValue << " B=" << wb_blue.nCurValue;
-                }
+            // 将白平衡数值应用到所有相机（关闭自动，锁定为手动固定值）
+            for (size_t i = 0; i < handles_.size(); ++i) {
+                if (handles_[i] == nullptr) continue;
+                MV_CC_SetBalanceWhiteAuto(handles_[i], 0);
+                wb_ret = MV_CC_SetBalanceRatioRed(handles_[i], wb_red.nCurValue);
+                if (MV_OK != wb_ret) LOG(ERROR) << "SetBalanceRatioRed on cam " << i << " fail!";
+                wb_ret = MV_CC_SetBalanceRatioGreen(handles_[i], wb_green.nCurValue);
+                if (MV_OK != wb_ret) LOG(ERROR) << "SetBalanceRatioGreen on cam " << i << " fail!";
+                wb_ret = MV_CC_SetBalanceRatioBlue(handles_[i], wb_blue.nCurValue);
+                if (MV_OK != wb_ret) LOG(ERROR) << "SetBalanceRatioBlue on cam " << i << " fail!";
+                LOG(INFO) << "White balance applied to camera " << i
+                          << ": R=" << wb_red.nCurValue << " G=" << wb_green.nCurValue << " B=" << wb_blue.nCurValue;
             }
         }
     }
 
-    // 注意：原代码此处逻辑有误 —— 检测到设备应返回 true，但写反了
-    // 修正如下：
+    // === Step 6: 白平衡设置完毕，统一启动所有相机抓图 ===
+    for (size_t i = 0; i < handles_.size(); ++i) {
+        if (handles_[i] == nullptr) continue;
+        int ret = MV_CC_StartGrabbing(handles_[i]);
+        if (MV_OK != ret) {
+            LOG(ERROR) << "MV_CC_StartGrabbing fail on cam " << i << "! n_ret [" << ret << "]";
+        }
+    }
+
     return st_device_list.nDeviceNum > 0;
 }
 
 void MvCam::Stop() {
+  // 先停止抓图，让 GetImageBuffer 立即返回错误，线程才能检查 is_running 并退出
+  for (size_t i = 0; i < handles_.size(); ++i) {
+    if (handles_[i] == nullptr) continue;
+    MV_CC_StopGrabbing(handles_[i]);
+  }
+  // 通知所有线程退出
   Disable();
-  std::this_thread::sleep_for(std::chrono::milliseconds{500});
+  // 等待所有接收线程退出
   for (auto &cam_thread : cam_threads) {
-    while (cam_thread.joinable()) {
+    if (cam_thread.joinable()) {
       cam_thread.join();
     }
   }
   cam_threads.clear();
   cam_threads.shrink_to_fit();
+  // 线程已全部退出后再关闭设备
   for (size_t i = 0; i < handles_.size(); ++i) {
     if (handles_[i] == nullptr) continue;
-    int n_ret = MV_OK;
-    n_ret = MV_CC_StopGrabbing(handles_[i]);
-    if (MV_OK != n_ret) {
-      LOG(ERROR) << "MV_CC_StopGrabbing fail! n_ret [" << n_ret << "]";
-    }
-    n_ret = MV_CC_CloseDevice(handles_[i]);
+    int n_ret = MV_CC_CloseDevice(handles_[i]);
     if (MV_OK != n_ret) {
       LOG(ERROR) << "MV_CC_CloseDevice fail! n_ret [" << n_ret << "]";
     }
@@ -552,8 +563,10 @@ void MvCam::Receive(void *handle, const std::string &name) {
   MV_FRAME_OUT st_out_frame;
   CamData cam_data;
   Messenger &messenger = Messenger::GetInstance();
-#define MAX_IMAGE_DATA_SIZE (3 * 4000 * 4000)
+#define MAX_IMAGE_DATA_SIZE (3 * 2048 * 1500)
   std::vector<unsigned char> convert_buf(MAX_IMAGE_DATA_SIZE);
+  // 预分配 LSC 临时缓冲，避免每帧 malloc/free，大小按最大帧预留
+  std::vector<unsigned char> lsc_tmp(MAX_IMAGE_DATA_SIZE);
   while (is_running) {
     memset(&st_out_frame, 0, sizeof(MV_FRAME_OUT));
     int n_ret = MV_CC_GetImageBuffer(handle, &st_out_frame, 10);
@@ -598,6 +611,7 @@ void MvCam::Receive(void *handle, const std::string &name) {
       // LOG(INFO) << "time_stamp_s: " << cam_data.time_stamp_us/1000000 << " not found!";
     }
 
+<<<<<<< HEAD
     MvGvspPixelType en_dst_pixel_type = PixelType_Gvsp_Undefined;
     unsigned int n_channel_num = 0;
     // 如果是彩色则转成BGR8
@@ -654,6 +668,52 @@ void MvCam::Receive(void *handle, const std::string &name) {
               n_src_len_for_convert = stLSCCorr.nDstBufLen;
             } else {
               LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
+=======
+            // 如果配置中为该相机加载了 LSC 校准表，则先矫正再转换像素格式
+            auto calib_it = calib_map_.find(name);
+            if (calib_it != calib_map_.end() && !calib_it->second.empty()) {
+              const unsigned int lsc_buf_size = st_out_frame.stFrameInfo.nFrameLen;
+              // lsc_tmp 已在循环外预分配，只在帧变大时才扩容
+              if (lsc_tmp.size() < lsc_buf_size) {
+                lsc_tmp.resize(lsc_buf_size);
+              }
+              MV_CC_LSC_CORRECT_PARAM stLSCCorr{};
+              stLSCCorr.nWidth = st_out_frame.stFrameInfo.nWidth;
+              stLSCCorr.nHeight = st_out_frame.stFrameInfo.nHeight;
+              stLSCCorr.enPixelType = st_out_frame.stFrameInfo.enPixelType;
+              stLSCCorr.pSrcBuf = st_out_frame.pBufAddr;
+              stLSCCorr.nSrcBufLen = st_out_frame.stFrameInfo.nFrameLen;
+              stLSCCorr.pDstBuf = lsc_tmp.data();
+              stLSCCorr.nDstBufSize = (unsigned int)lsc_tmp.size();
+              stLSCCorr.pCalibBuf = calib_it->second.data();
+              stLSCCorr.nCalibBufLen = (unsigned int)calib_it->second.size();
+
+              int lret;
+              {
+                std::lock_guard<std::mutex> lock(g_lsc_mutex);
+                lret = MV_CC_LSCCorrect(handle, &stLSCCorr);
+              }
+              if (lret == MV_OK) {
+                p_src_for_convert = lsc_tmp.data();
+                n_src_len_for_convert = (stLSCCorr.nDstBufLen > 0) ? stLSCCorr.nDstBufLen : lsc_buf_size;
+              } else {
+                LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
+              }
+            }
+
+            stConvertParam.pSrcData    = p_src_for_convert;
+            stConvertParam.nSrcDataLen = n_src_len_for_convert;
+            stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
+            stConvertParam.pDstBuffer     = convert_buf.data();
+            stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE;
+            stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType;
+            int nRet = MV_CC_ConvertPixelType(handle, &stConvertParam);
+            if (nRet != MV_OK) {
+              printf("Pixel conversion failed! Error: 0x%x\n", nRet);
+              // 不能 continue，必须先 FreeImageBuffer 再跳出
+              MV_CC_FreeImageBuffer(handle, &st_out_frame);
+              continue;
+>>>>>>> ec1b558c99fbb61fd18060f6e5d2157dd585ef0e
             }
           }
 
