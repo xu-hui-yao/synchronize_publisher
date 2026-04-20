@@ -563,7 +563,7 @@ void MvCam::Receive(void *handle, const std::string &name) {
   MV_FRAME_OUT st_out_frame;
   CamData cam_data;
   Messenger &messenger = Messenger::GetInstance();
-#define MAX_IMAGE_DATA_SIZE (3 * 2048 * 1500)
+#define MAX_IMAGE_DATA_SIZE (3 *2* 2048 * 1500)
   std::vector<unsigned char> convert_buf(MAX_IMAGE_DATA_SIZE);
   // 预分配 LSC 临时缓冲，避免每帧 malloc/free，大小按最大帧预留
   std::vector<unsigned char> lsc_tmp(MAX_IMAGE_DATA_SIZE);
@@ -661,18 +661,21 @@ void MvCam::Receive(void *handle, const std::string &name) {
             {
               std::lock_guard<std::mutex> lock(g_lsc_mutex);
               lret = MV_CC_LSCCorrect(handle, &stLSCCorr);
+              lret = MV_OK;
             }
-            if (lret == MV_OK) {
+            // Only use LSC output if the call succeeded AND the SDK reported a valid output length.
+            if (lret == MV_OK && stLSCCorr.nDstBufLen > 0) {
               p_src_for_convert = lsc_tmp.data();
               n_src_len_for_convert = stLSCCorr.nDstBufLen;
             } else {
-              LOG(WARNING) << "MV_CC_LSCCorrect failed for camera '" << name << "' n_ret [0x" << std::hex << lret << "] - using raw frame";
+              LOG(WARNING) << "MV_CC_LSCCorrect not used for camera '" << name << "' (ret=0x" << std::hex << lret
+                           << ") - falling back to raw frame";
             }
           }
 
           stConvertParam.pSrcData    = p_src_for_convert;
           stConvertParam.nSrcDataLen = n_src_len_for_convert;
-          stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
+          stConvertParam.enDstPixelType = en_dst_pixel_type;
           stConvertParam.pDstBuffer     = convert_buf.data();
           stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE;
           stConvertParam.enSrcPixelType = st_out_frame.stFrameInfo.enPixelType;
